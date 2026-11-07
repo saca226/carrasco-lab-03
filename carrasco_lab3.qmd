@@ -1,0 +1,541 @@
+---
+title: "Linear Regression: Model Specification, Comparison, and Interpretation"
+subtitle: "A worked example using occupational prestige"
+author: "Salome Carrasco"
+editor: visual
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: show
+    code-tools: true
+    embed-resources: true
+    theme: cosmo
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+Using the built-in R dataset attitude
+
+## 1.2 Load the required packages
+
+```r
+#| label: installing packages
+
+install.packages(c(
+  "carData", "dplyr", "tidyr", "ggplot2",
+  "broom", "performance", "gt"
+))
+
+```
+
+## 1.3 Load the dataset
+
+```{r}
+#| label: setup
+
+library(carData)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(broom)
+library(performance)
+library(gt)
+```
+
+# Data focus
+
+We will be focusing on four variables: rating (outcome), complaints, learning, and raises (predictors). Rating is the overall workplace rating, so a low score would be a poor work environment, while a high score would be an excellent work environment. Complaints are how well the department handles employee complaints. Learning is the opportunity to learn. Raises is how much the pay increases.
+
+```{r}
+# Keep the same complete-case sample for every model
+dat <- attitude |>
+  select(rating, complaints, learning, raises) |>
+  drop_na()
+
+n <- nrow(dat)
+```
+
+## 1.4 Explore data
+
+``` r
+head(dat)
+summary(dat)
+nrow(dat)
+ncol(dat)
+```
+
+### First several observations
+
+Type in Console: head(dat)
+
+### Dataset structure
+
+Number of Columns: 7 categories
+
+Names of categories and ranges:
+
+- rating (40-85) (`{r} min(dat$rating)`-`{r} max(dat$rating)`)
+- complaints (37-90)
+- learning (34-75)
+- raises (43-88)
+
+Number of rows: 30 ratings recorded (departments) Type of data: double point
+
+Expectations prior to data observation:
+
+- The less a department handles employee complaints the lower the rating. - The more the raises the higher the rating. This may be more logarithmic than a linear relationship.
+- The average score will be higher than 60.
+
+### Calculate descriptive statistics
+
+```{r}
+#| label: descriptive-table
+#| tbl-cap: "Descriptive statistics for continuous variables"
+
+descriptives <- dat |>
+  summarise(
+    across(
+      c(rating, complaints, learning, raises),
+      list(mean = mean, sd = sd, min = min, max = max)
+    )
+  ) |>
+  pivot_longer(
+    everything(),
+    names_to = c("variable", ".value"),
+    names_sep = "_"
+  )
+
+descriptives |>
+  gt() |>
+  fmt_number(columns = where(is.numeric), decimals = 2)
+```
+
+### Histogram of rating
+
+```{r}
+#| label: rating-distribution
+#| fig-cap: "Distribution of workplace rating scores"
+
+ggplot(dat, aes(x = rating)) +
+  geom_histogram(
+    aes(y = after_stat(density)),
+    bins = 15,
+    fill = "#669BBC",
+    color = "white",
+    alpha = 0.8
+  ) +
+  geom_density(
+    linewidth = 0.9,
+    color = "#9A3038"
+  ) +
+  labs(
+    x = "Workplace Rating Scores",
+    y = "Density"
+  ) +
+  theme_minimal(base_size = 12)
+```
+
+### Scatterplot of relationship between rating and
+
+```{r}
+#| label: complaints-scatterplot
+#| fig-cap: "Relationship between how well complaints are handled and rating"
+
+ggplot(dat, aes(x = complaints, y = rating)) +
+  geom_point(alpha = 0.75) +
+  geom_smooth(
+    method = "lm",
+    se = TRUE,
+    color = "#27638A"
+  ) +
+  labs(
+    x = "Handling Complaints Score",
+    y = "Workplace Rating"
+  ) +
+  theme_minimal(base_size = 12)
+```
+
+### Scatterplot of relationship between rating and
+
+```{r}
+#| label: raises-scatterplot
+#| fig-cap: "Relationship between raises and rating"
+
+ggplot(dat, aes(x = raises, y = rating)) +
+  geom_point(alpha = 0.75) +
+  geom_smooth(
+    method = "lm",
+    se = TRUE,
+    color = "#27638A"
+  ) +
+  labs(
+    x = "Raises Score",
+    y = "Rating Score"
+  ) +
+  theme_minimal(base_size = 12)
+```
+
+Looking at the histogram of the rating scores provided by the departments we can see an average score lands at around 65 with a relatively close right skewed bell curve towards the higher end on workplace rating. We also observe linear relationships between overall workplace rating and how the department handles employee complaints and pay increases. Pay increase has a wider confidence interval than how complaints are handled, with a more narrow confidence interval. This tells us there may be more close relationship between rating score and how well a department handles complaints than raise. In turn we may reconsider linear relationship for the raises relationship scatter plot. These observations are close to what I was expecting, I was expecting the average to be a little higher.
+
+## 2.1 Research question and predictions
+
+How are scores of handling complaints, learning oportunities, and raises associated with workplace ratings?
+
+We expect:
+
+- Workplaces that have a greater ability to handle complaints will have higher ratings.
+  - The more readily complaints are handled the less time there is for confusion and complications in a workplace leading a smother workplace environment where mistakes can easily be fixed and changes can be made.
+- Workplaces that offer more learning opportunities will have higher ratings.
+  - People can have more stability with more pay which can lead to overall encouragement to continue work.
+- Workplaces that offer more pay increase will explain additional variation in workplace ratings beyond complaints and pay increases.
+  - The ability for workers to learn in an environment the more they can adapt and improve, which can lead to increase in confidence in their work environment.
+
+These are predictions about associations, not causal effects.
+
+------------------------------------------------------------------------
+
+## 2.2 Specify and estimate competing models
+
+We will fit an intercept-only model and three increasingly complex substantive models.
+
+| Model | Formula | Research rationale |
+|:-----------------------|:-----------------------|:-----------------------|
+| M0: Null | `rating ~ 1` | Baseline model |
+| M1: Complaints | `rating ~ complaints` | Rating varies with complaints |
+| M2: Complaints + Learning | `rating ~ complaints + learning` | Learning explains additional variation |
+| M3: Expanded | `rating ~ complaints + learning + raises` | Raises explain additional variation |
+
+The models are **nested**: each successive model contains all predictors from the preceding model, plus one or more additional predictors.
+
+```{r}
+#| label: fit-models
+
+# Intercept-only model
+mod0 <- lm(rating ~ 1, data = dat)
+
+# Complaints model
+mod1 <- lm(rating ~ complaints, data = dat)
+
+# Complaints + learning model
+mod2 <- lm(rating ~ complaints + learning, data = dat)
+
+# Expanded model
+mod3 <- lm(rating ~ complaints + learning + raises, data = dat)
+```
+
+## 2.3 Inspecting the fitted models
+
+Input resuls in **R Console**:
+
+``` r
+summary(mod0)
+summary(mod1)
+summary(mod2)
+summary(mod3)
+
+confint(mod3)
+```
+
+- M0
+  - Intercept represents the sample mean rating score
+  - Estimated regression coefficient (64.63)
+- M1
+  - Intercept represents the predicted rating when complaints are zero (14.38)
+  - Complaints coefficient represents the association between complaints and rating (0.75)
+  - Positive association with complaints (+0.75)
+  - Model R² explains 68.13% of variation, adjusted R² explains 66.99% of variation in ratings
+- M2
+  - Intercept represent the predicted rating complaints and learning are zero (9.87)
+  - Complaints coefficient represents the association after adjusting for learning
+  - Positive association with complaints (+0.64) and learning (+0.21)
+  - Model R² explains 70.8% of variation, adjusted R² explains to 68.6% of variation in ratings
+- M3
+  - Intercept represents the predicted rating when complaints, learning, and raises are zero (10.52)
+  - Complaints coefficient represents the association between complaints and rating after adjusting for learning and raises
+  - Positive association with complaints (+0.65) and learning (+0.22), and negative association with raises (−0.03)
+  - Model R² explains 70.83% of variation, adjusted R² explains 67.46% of variation in ratings
+
+Overall complaints coefficients decrease slightly but remain positive and statistically significant. Learning remains positive increasing slightly but not significant. Raises has a small negative coefficient but is not statistically significant
+
+------------------------------------------------------------------------
+
+## Compare the models
+
+### 3.1 Nested-model F-test
+
+```{r}
+#| label: nested-tests
+
+tests <- anova(mod0, mod1, mod2, mod3)
+
+tests
+```
+
+1.  Complaints significantly improve model fit compared with intercept-only model. (F stat of 60.73)
+2.  Adding learning does not significantly improve model fit beyond complaints. (F stat of 2.38)
+3.  Adding raises does not significanly improve model fit beyond complaints and learning. (F stat of 0.88)
+
+```{r}
+#| label: prepare-nested-tests
+
+tests <- tests |>
+  select(Res.Df, Df, F, `Pr(>F)`) |>
+  rename(
+    Residual.df = Res.Df,
+    Nested.Df = Df,
+    Nested.F.stat = F,
+    Nested.p.value = `Pr(>F)`
+  )
+```
+
+### 3.2 Extract model-level performance statistics
+
+```{r}
+#| label: extract-model-metrics
+
+glance0 <- glance(mod0)
+glance1 <- glance(mod1)
+glance2 <- glance(mod2)
+glance3 <- glance(mod3)
+```
+
+```{r}
+#| label: combine-model-metrics
+
+mods <- c(
+  "M0: Null",
+  "M1: Complaints",
+  "M2: + Learning",
+  "M3: + Raises"
+)
+
+glances <- rbind(
+  glance0,
+  glance1,
+  glance2,
+  glance3
+)
+```
+
+```{r}
+#| label: combine-comparisons
+
+comparison_table <- cbind(
+  Model = mods,
+  glances,
+  tests
+)
+```
+
+### 3.3 Calculate changes in explained varience (RMSE)
+
+```{r}
+#| label: prepare-comparison-table
+
+comparison_table <- comparison_table |>
+  mutate(
+    Delta.R2 = r.squared - lag(r.squared),
+
+    RMSE = c(
+      sqrt(mean(residuals(mod0)^2)),
+      sqrt(mean(residuals(mod1)^2)),
+      sqrt(mean(residuals(mod2)^2)),
+      sqrt(mean(residuals(mod3)^2))
+    )
+  ) |>
+  select(
+    Model,
+    r.squared,
+    Delta.R2,
+    adj.r.squared,
+    RMSE,
+    Residual.df,
+    Nested.Df,
+    Nested.F.stat,
+    Nested.p.value
+  )
+```
+
+### 3.4 Combined model-comparison table
+
+```{r}
+#| label: model-comparison-table
+#| tbl-cap: "Overall model performance and incremental nested-model comparisons"
+
+comparison_table |>
+  gt() |>
+  cols_label(
+    Model = "Model",
+    r.squared = "R²",
+    Delta.R2 = "ΔR²",
+    adj.r.squared = "Adjusted R²",
+    RMSE = "RMSE",
+    Residual.df = "Residual df",
+    Nested.Df = "Nested df",
+    Nested.F.stat = "Nested F",
+    Nested.p.value = "Nested p"
+  ) |>
+  fmt_number(
+    columns = c(
+      r.squared,
+      Delta.R2,
+      adj.r.squared,
+      RMSE,
+      Nested.F.stat
+    ),
+    decimals = 3
+  ) |>
+  fmt(
+    columns = Nested.p.value,
+    fns = function(x) {
+      ifelse(
+        is.na(x),
+        "—",
+        ifelse(x < .001, "< .001", sprintf("%.3f", x))
+      )
+    }
+  ) |>
+  sub_missing(
+    columns = c(Delta.R2, Nested.Df, Nested.F.stat),
+    missing_text = "—"
+  )
+```
+
+The model with the highest R² (M3) has the largest portion of variation explained at 70.8%. However M2 has a higher adjusted R². The adjusted R² increases with each model, but drops at the last model. These adjusted R² patterns suggest that adding raises doesn't improve the model as much. M1 with complaints explains +68.1%, M2 with learning explains +2.7%, Raise has no increase in explanation. Adding complaints (M1) significantly improves the model fit (\<0.01) while adding learning (M2) and raises (M3) do not significantly improve the model fit. The RMSE decreases from the initial model (M0) 11.97 to 6.76 when adding complaints (M1). This shows improvement in accuracy for prediction. This tells us that complaints are the most significant in explaining variation in ratings.
+
+#### Additional performance comparison
+
+```{r}
+#| label: performance-comparison
+#| results: hide
+
+performance_comparison <- compare_performance(
+  mod0,
+  mod1,
+  mod2,
+  mod3,
+  rank = TRUE
+)
+```
+
+This tells us that M2 would be the best fit.
+
+```{r}
+#| label: select-model
+
+selected_row <- comparison_table |>
+  slice_max(
+    order_by = adj.r.squared,
+    n = 1,
+    with_ties = FALSE
+  )
+
+selected_name <- selected_row$Model
+
+selected_model <- switch(
+  selected_name,
+  "M0: Null" = mod0,
+  "M1: Complaints" = mod1,
+  "M2: + Learning" = mod2,
+  "M3: + Raises" = mod3
+)
+```
+
+## 4.1 Examine assumptions
+
+``` r
+check_model(mod2)
+```
+
+The normality falls relatively flat on the line with a bit of variance. The residuals are approximately normally distributed. Homescedasticity is has some dips and rises but overall the residual variability is relatively consistent across fitted values. Influential observations have no observations that fall outside of the funnel that would influence the model. Multicoliniarity is low so the unique contributions won't be difficult to estimate precisely.
+
+## 4.2 Standard diagnostic plots
+
+```{r}
+#| label: diagnostics
+#| fig-cap: "Regression diagnostic plots for the provisionally selected model"
+#| fig-width: 9
+#| fig-height: 8
+
+op <- par(mfrow = c(2, 2))
+
+plot(selected_model)
+
+par(op)
+```
+
+The Q-Q plot suggests normality assumption is reasonably satisfied as most points follow the reference line. Interestingly, the points follow a step-like pattern with deviations on both tails. This suggests potential straying from normality in the extreme residuals and at certain degrees along the reference line. The deviations don't appear substantial to affect confidence in the model, it just seems to show a pattern that there may be a trend of similar average numbers across ratings.
+
+## 5.1 Select a model
+
+Model chosen is the second one where complaints and learning are included when testing workplace ratings.
+
+## 5.2 Create coefficient table
+
+```{r}
+#| label: extract-coefficients
+
+coefficient_results <- tidy(
+  selected_model,
+  conf.int = TRUE,
+  conf.level = 0.95
+)
+```
+
+### Create a formatted coefficient table
+
+```{r}
+#| label: coefficient-table
+#| tbl-cap: "Unstandardized regression coefficients for the selected model"
+
+coefficient_results |>
+  select(
+    term,
+    estimate,
+    std.error,
+    conf.low,
+    conf.high,
+    p.value
+  ) |>
+  gt() |>
+  cols_label(
+    term = "Predictor",
+    estimate = "Estimate",
+    std.error = "SE",
+    conf.low = "95% CI lower",
+    conf.high = "95% CI upper",
+    p.value = "p"
+  ) |>
+  fmt_number(
+    columns = c(
+      estimate,
+      std.error,
+      conf.low,
+      conf.high
+    ),
+    decimals = 3
+  ) |>
+  fmt(
+    columns = p.value,
+    fns = function(x) {
+      ifelse(
+        x < .001,
+        "< .001",
+        sprintf("%.3f", x)
+      )
+    }
+  )
+```
+
+In M2, the intercept represents the predicted rating when complaints and learning are both zero. The estimate is `r round(coefficient_results |> filter(term == "(Intercept)") |> pull(estimate), 3)`, with a 95% confidence interval ranging from `r round(coefficient_results |> filter(term == "(Intercept)") |> pull(conf.low), 3)` to `r round(coefficient_results |> filter(term == "(Intercept)") |> pull(conf.high), 3)`. Complaints has a **positive** association with ratings, meaning that for every one-unit increase in complaints, the predicted rating increases by `r round(coefficient_results |> filter(term == "complaints") |> pull(estimate), 3)` points, where learning is held constant. The 95% confidence interval ranges from `r round(coefficient_results |> filter(term == "complaints") |> pull(conf.low), 3)` to `r round(coefficient_results |> filter(term == "complaints") |> pull(conf.high), 3)`, indicating a **statistically significant positive** association. Learning also has a positive association with ratings, with every one-unit increase in learning corresponding to an increase of `r round(coefficient_results |> filter(term == "learning") |> pull(estimate), 3)` points, holding complaints constant. However, its 95% confidence interval ranges from `r round(coefficient_results |> filter(term == "learning") |> pull(conf.low), 3)` to `r round(coefficient_results |> filter(term == "learning") |> pull(conf.high), 3)`, which includes zero, indicating that learning is **not a statistically significant** predictor of ratings.
+
+## 6 Discuss your findings and limitations
+
+These results suggest that when a workplace handles complaints frequently there is overall an increased rating of the workplace. Additionally when including more learning opportunities for workers there is also an increased rating of the workplace. In the last model we found that increasing pay doesn't significantly impact how workers rate their workplace as much as dealing with complaints and learning opportunities. Overall, the findings suggest that a workplace that with conflict management at it's core that encourages growth and development leads to a more positive connection with a work environment. 
+However some limitations to consider would be a small sample size with 30 administrations observed which may limit how much we can generalize from these findings. The results show associations rather than causation, meaning we can't conclude that better complaint handling directly causes higher workplace ratings. With learning and pay not showing to be statistically significant, interpretations of their affect are limited. There are also other workplace factors that can be at play that is outside of what we observed, like a feeling of equity and inclusion, offering time off, like maternity leave, and a feeling of a more male or female dominated work environment.
+
+--------------------------------------------------------------------------

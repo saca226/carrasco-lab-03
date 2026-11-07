@@ -1,0 +1,750 @@
+---
+title: "Linear Regression: Model Specification, Comparison, and Interpretation"
+subtitle: "A worked example using occupational prestige"
+author: "Graduate Statistics — Demonstration"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: show
+    code-tools: true
+    embed-resources: true
+    theme: cosmo
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+## Purpose
+
+This report demonstrates a complete linear regression workflow:
+
+**Explore Data → Specify Models → Estimate Models → Compare Models → Evaluate Assumptions → Select a Model → Interpret Results**
+
+We will use the `carData::Prestige` dataset to investigate associations between occupational prestige, education, income, and occupational category.
+
+Our objectives are to:
+
+1.  Specify and estimate several plausible competing regression models.
+2.  Compare nested models using F-tests and changes in explained variance.
+3.  Evaluate overall model performance using R², adjusted R², and RMSE.
+4.  Examine regression diagnostics.
+5.  Select and interpret a preferred model.
+6.  Report results reproducibly using Quarto.
+
+All numerical results in this document are generated directly from the analysis.
+
+## 1. Load packages and prepare the data
+
+Install any missing packages **once in the R Console**:
+
+``` r
+install.packages(c(
+  "carData", "dplyr", "tidyr", "ggplot2",
+  "broom", "performance", "gt"
+))
+```
+
+The following code belongs in the Quarto document.
+
+```{r}
+#| label: setup
+
+library(carData)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(broom)
+library(performance)
+library(gt)
+
+# Keep the same complete-case sample for every model
+dat <- Prestige |>
+  select(prestige, education, income, type) |>
+  drop_na() |>
+  mutate(type = factor(type))
+
+n <- nrow(dat)
+```
+
+The dataset contains occupational prestige scores, average education, average income, and occupational categories.
+
+We use complete cases for all variables so that the candidate models are estimated using the same observations.
+
+The final analysis includes **`r n` occupations**.
+
+### Research question and predictions
+
+How are education, income, and occupational category associated with occupational prestige?
+
+We expect:
+
+- Occupations requiring more education to have higher prestige.
+- Occupations with higher average incomes to have higher prestige.
+- Occupational category to explain additional variation in prestige beyond education and income.
+
+These are predictions about associations, not causal effects.
+
+------------------------------------------------------------------------
+
+## 2. Explore the data
+
+### Descriptive statistics
+
+```{r}
+#| label: descriptive-table
+#| tbl-cap: "Descriptive statistics for continuous variables"
+
+descriptives <- dat |>
+  summarise(
+    across(
+      c(prestige, education, income),
+      list(mean = mean, sd = sd, min = min, max = max)
+    )
+  ) |>
+  pivot_longer(
+    everything(),
+    names_to = c("variable", ".value"),
+    names_sep = "_"
+  )
+
+descriptives |>
+  gt() |>
+  fmt_number(columns = where(is.numeric), decimals = 2)
+```
+
+### Occupational categories
+
+```{r}
+#| label: category-counts
+#| tbl-cap: "Occupational category frequencies"
+
+dat |>
+  count(type) |>
+  gt()
+```
+
+### Distribution of prestige
+
+```{r}
+#| label: outcome-distribution
+#| fig-cap: "Distribution of occupational prestige scores"
+
+ggplot(dat, aes(x = prestige)) +
+  geom_histogram(
+    aes(y = after_stat(density)),
+    bins = 15,
+    fill = "#669BBC",
+    color = "white",
+    alpha = 0.8
+  ) +
+  geom_density(
+    linewidth = 0.9,
+    color = "#9A3038"
+  ) +
+  labs(
+    x = "Occupational prestige score",
+    y = "Density"
+  ) +
+  theme_minimal(base_size = 12)
+```
+
+### Relationships between predictors and prestige
+
+```{r}
+#| label: education-scatterplot
+#| fig-cap: "Relationship between education and occupational prestige"
+
+ggplot(dat, aes(x = education, y = prestige)) +
+  geom_point(alpha = 0.75) +
+  geom_smooth(
+    method = "lm",
+    se = TRUE,
+    color = "#27638A"
+  ) +
+  labs(
+    x = "Average years of education",
+    y = "Prestige score"
+  ) +
+  theme_minimal(base_size = 12)
+```
+
+```{r}
+#| label: income-scatterplot
+#| fig-cap: "Relationship between income and occupational prestige"
+
+ggplot(dat, aes(x = income, y = prestige)) +
+  geom_point(alpha = 0.75) +
+  geom_smooth(
+    method = "lm",
+    se = TRUE,
+    color = "#27638A"
+  ) +
+  labs(
+    x = "Average income",
+    y = "Prestige score"
+  ) +
+  theme_minimal(base_size = 12)
+```
+
+These exploratory plots allow us to examine whether the relationships appear approximately linear and whether unusual observations may affect the regression analyses.
+
+The regression lines shown here are bivariate relationships rather than relationships adjusted for other predictors.
+
+------------------------------------------------------------------------
+
+## 3. Specify and estimate competing models
+
+We will fit an intercept-only model and three increasingly complex substantive models.
+
+| Model | Formula | Research rationale |
+|:-----------------------|:-----------------------|:-----------------------|
+| M0: Null | `prestige ~ 1` | Baseline model |
+| M1: Education | `prestige ~ education` | Prestige varies with education |
+| M2: Education + Income | `prestige ~ education + income` | Income explains additional variation |
+| M3: Expanded | `prestige ~ education + income + type` | Occupational category explains additional variation |
+
+The models are **nested**: each successive model contains all predictors from the preceding model, plus one or more additional predictors.
+
+```{r}
+#| label: fit-models
+
+# Intercept-only model
+mod0 <- lm(prestige ~ 1, data = dat)
+
+# Education model
+mod1 <- lm(prestige ~ education, data = dat)
+
+# Education + income model
+mod2 <- lm(prestige ~ education + income, data = dat)
+
+# Expanded model
+mod3 <- lm(prestige ~ education + income + type, data = dat)
+```
+
+### Inspecting the models
+
+After executing the model-fitting code, explore the results in the **R Console**:
+
+``` r
+summary(mod0)
+summary(mod1)
+summary(mod2)
+summary(mod3)
+
+confint(mod3)
+```
+
+Some important interpretive distinctions:
+
+- In M0, the intercept represents the sample mean prestige score.
+- In M1, the education coefficient represents the expected difference in prestige associated with one additional year of average education.
+- In M2, the education coefficient represents this association after adjusting for income.
+- In M3, education and income coefficients are additionally adjusted for occupational category.
+
+For categorical predictors, R uses a reference category by default.
+
+Examine the coding using:
+
+``` r
+levels(dat$type)
+contrasts(dat$type)
+```
+
+------------------------------------------------------------------------
+
+## 4. Compare the models
+
+We will evaluate the models using two complementary approaches.
+
+**Nested-model F-tests** determine whether the additional predictor(s) in a larger model produce a statistically significant improvement in fit.
+
+**Overall model performance** describes how well each model fits the observed data.
+
+Our main performance metrics are:
+
+- **R²:** Proportion of variation explained.
+- **Adjusted R²:** Explained variation adjusted for model complexity.
+- **RMSE:** Root mean squared error, expressed in prestige-score units.
+- **ΔR²:** Increase in explained variation compared with the preceding model.
+
+### 4.1. Conduct nested-model comparisons
+
+Because our models are nested and estimated using the same observations, we can compare all four models in a single `anova()` call.
+
+```{r}
+#| label: nested-tests
+
+tests <- anova(mod0, mod1, mod2, mod3)
+
+tests
+```
+
+Each row represents a model. The F-statistic and p-value on each row after the first test whether that model improves fit relative to the preceding model.
+
+For example:
+
+- M1 versus M0 tests the contribution of education.
+- M2 versus M1 tests the additional contribution of income.
+- M3 versus M2 tests the joint additional contribution of occupational category.
+
+We can retain and rename the statistics relevant to our comparison table.
+
+```{r}
+#| label: prepare-nested-tests
+
+tests <- tests |>
+  select(Res.Df, Df, F, `Pr(>F)`) |>
+  rename(
+    Residual.df = Res.Df,
+    Nested.Df = Df,
+    Nested.F.stat = F,
+    Nested.p.value = `Pr(>F)`
+  )
+```
+
+### 4.2. Extract overall model performance
+
+The `glance()` function returns a one-row data frame containing model-level statistics.
+
+We can apply it to each fitted model.
+
+```{r}
+#| label: extract-model-metrics
+
+glance0 <- glance(mod0)
+glance1 <- glance(mod1)
+glance2 <- glance(mod2)
+glance3 <- glance(mod3)
+```
+
+We can then combine these results using `rbind()`.
+
+```{r}
+#| label: combine-model-metrics
+
+mods <- c(
+  "M0: Null",
+  "M1: Education",
+  "M2: + Income",
+  "M3: + Type"
+)
+
+glances <- rbind(
+  glance0,
+  glance1,
+  glance2,
+  glance3
+)
+```
+
+### 4.3. Combine nested tests and model performance
+
+Because the rows in `glances` and `tests` represent the same models in the same order, we can combine them using `cbind()`.
+
+```{r}
+#| label: combine-comparisons
+
+comparison_table <- cbind(
+  Model = mods,
+  glances,
+  tests
+)
+```
+
+Next, calculate the change in R² between successive models using `lag()`.
+
+We will also calculate RMSE directly from each model's residuals.
+
+```{r}
+#| label: prepare-comparison-table
+
+comparison_table <- comparison_table |>
+  mutate(
+    Delta.R2 = r.squared - lag(r.squared),
+
+    RMSE = c(
+      sqrt(mean(residuals(mod0)^2)),
+      sqrt(mean(residuals(mod1)^2)),
+      sqrt(mean(residuals(mod2)^2)),
+      sqrt(mean(residuals(mod3)^2))
+    )
+  ) |>
+  select(
+    Model,
+    r.squared,
+    Delta.R2,
+    adj.r.squared,
+    RMSE,
+    Residual.df,
+    Nested.Df,
+    Nested.F.stat,
+    Nested.p.value
+  )
+```
+
+**Why calculate RMSE separately?**
+
+Although `glance()` provides a statistic called `sigma`, this is the residual standard error rather than the ordinary in-sample RMSE. The two use different denominators.
+
+For consistency, we calculate RMSE explicitly as the square root of the mean squared residual.
+
+### 4.4. Display the combined model-comparison table
+
+```{r}
+#| label: model-comparison-table
+#| tbl-cap: "Overall model performance and incremental nested-model comparisons"
+
+comparison_table |>
+  gt() |>
+  cols_label(
+    Model = "Model",
+    r.squared = "R²",
+    Delta.R2 = "ΔR²",
+    adj.r.squared = "Adjusted R²",
+    RMSE = "RMSE",
+    Residual.df = "Residual df",
+    Nested.Df = "Nested df",
+    Nested.F.stat = "Nested F",
+    Nested.p.value = "Nested p"
+  ) |>
+  fmt_number(
+    columns = c(
+      r.squared,
+      Delta.R2,
+      adj.r.squared,
+      RMSE,
+      Nested.F.stat
+    ),
+    decimals = 3
+  ) |>
+  fmt(
+    columns = Nested.p.value,
+    fns = function(x) {
+      ifelse(
+        is.na(x),
+        "—",
+        ifelse(x < .001, "< .001", sprintf("%.3f", x))
+      )
+    }
+  ) |>
+  sub_missing(
+    columns = c(Delta.R2, Nested.Df, Nested.F.stat),
+    missing_text = "—"
+  )
+```
+
+### Interpreting the combined table
+
+Each row represents one fitted model.
+
+The first set of statistics describes the **overall performance** of that model:
+
+- R²
+- Adjusted R²
+- RMSE
+
+The second set describes its **incremental improvement** relative to the preceding model:
+
+- ΔR²
+- Nested degrees of freedom
+- Nested F-statistic
+- Nested p-value
+
+For example, the M2 row tells us:
+
+1.  How much variation M2 explains overall.
+2.  How much additional variation M2 explains compared with M1.
+3.  Whether the improvement is statistically significant.
+
+The M3 comparison tests the joint contribution of occupational category after accounting for education and income.
+
+The M0 row has no incremental comparison because it serves as the baseline.
+
+### 4.5. Additional performance comparison
+
+The `performance` package also provides a convenient way to compare fitted models.
+
+```{r}
+#| label: performance-comparison
+#| results: hide
+
+performance_comparison <- compare_performance(
+  mod0,
+  mod1,
+  mod2,
+  mod3,
+  rank = TRUE
+)
+```
+
+In the Console, inspect:
+
+``` r
+performance_comparison
+plot(performance_comparison)
+```
+
+These functions may include additional metrics such as AIC and BIC, which we will not focus on here.
+
+------------------------------------------------------------------------
+
+## 5. Select a provisional model
+
+Model selection requires considering both statistical evidence and model complexity.
+
+In particular, we should consider:
+
+1.  Whether adding predictors significantly improves model fit.
+2.  How much additional variation is explained.
+3.  Whether adjusted R² improves.
+4.  Whether RMSE meaningfully decreases.
+5.  Whether the added complexity is substantively justified.
+
+For this demonstration, we will use **adjusted R²** as an initial selection criterion.
+
+This is a convenient teaching example, not a universal rule for selecting regression models.
+
+```{r}
+#| label: select-model
+
+selected_row <- comparison_table |>
+  slice_max(
+    order_by = adj.r.squared,
+    n = 1,
+    with_ties = FALSE
+  )
+
+selected_name <- selected_row$Model
+
+selected_model <- switch(
+  selected_name,
+  "M0: Null" = mod0,
+  "M1: Education" = mod1,
+  "M2: + Income" = mod2,
+  "M3: + Type" = mod3
+)
+```
+
+The provisionally selected model is **`r selected_name`**.
+
+Its performance is:
+
+- R² = **`r round(selected_row$r.squared, 3)`**
+- Adjusted R² = **`r round(selected_row$adj.r.squared, 3)`**
+- RMSE = **`r round(selected_row$RMSE, 2)`** prestige points.
+
+We will now examine whether the selected model has important diagnostic problems.
+
+------------------------------------------------------------------------
+
+## 6. Evaluate regression diagnostics
+
+Regression diagnostics help identify potential violations of model assumptions and unusual observations.
+
+We will examine:
+
+- Linearity.
+- Residual normality.
+- Heteroscedasticity.
+- Influential observations.
+- Multicollinearity, where applicable.
+
+### Standard diagnostic plots
+
+```{r}
+#| label: diagnostics
+#| fig-cap: "Regression diagnostic plots for the provisionally selected model"
+#| fig-width: 9
+#| fig-height: 8
+
+op <- par(mfrow = c(2, 2))
+
+plot(selected_model)
+
+par(op)
+```
+
+When interpreting these plots, consider:
+
+**Residuals versus fitted values**
+
+Is there evidence of curvature or systematic patterns?
+
+**Normal Q–Q plot**
+
+Do the residuals deviate substantially from a normal distribution?
+
+**Scale–location plot**
+
+Does residual variability change across fitted values?
+
+**Residuals versus leverage**
+
+Are there observations with unusually high leverage or influence?
+
+### Additional diagnostics
+
+The `performance` package provides a more comprehensive diagnostic interface.
+
+Run the following interactively in the **Console**:
+
+``` r
+check_model(selected_model)
+```
+
+For models with multiple predictors, you can also investigate multicollinearity:
+
+``` r
+check_collinearity(selected_model)
+```
+
+These diagnostics should inform your final model selection.
+
+A model with slightly better fit statistics may not be preferable if its assumptions are seriously compromised.
+
+For the purposes of this worked example, we retain the provisionally selected model for the reporting demonstration.
+
+------------------------------------------------------------------------
+
+## 7. Report the selected model
+
+### 7.1. Extract regression coefficients
+
+The `tidy()` function extracts coefficient-level results from a fitted model.
+
+```{r}
+#| label: extract-coefficients
+
+coefficient_results <- tidy(
+  selected_model,
+  conf.int = TRUE,
+  conf.level = 0.95
+)
+```
+
+The resulting data frame contains:
+
+- Coefficient estimates.
+- Standard errors.
+- Test statistics.
+- p-values.
+- Confidence interval limits.
+
+### 7.2. Create a regression coefficient table
+
+```{r}
+#| label: coefficient-table
+#| tbl-cap: "Unstandardized regression coefficients for the selected model"
+
+coefficient_results |>
+  select(
+    term,
+    estimate,
+    std.error,
+    conf.low,
+    conf.high,
+    p.value
+  ) |>
+  gt() |>
+  cols_label(
+    term = "Predictor",
+    estimate = "Estimate",
+    std.error = "SE",
+    conf.low = "95% CI lower",
+    conf.high = "95% CI upper",
+    p.value = "p"
+  ) |>
+  fmt_number(
+    columns = c(
+      estimate,
+      std.error,
+      conf.low,
+      conf.high
+    ),
+    decimals = 3
+  ) |>
+  fmt(
+    columns = p.value,
+    fns = function(x) {
+      ifelse(
+        x < .001,
+        "< .001",
+        sprintf("%.3f", x)
+      )
+    }
+  )
+```
+
+### 7.3. Report overall model performance
+
+```{r}
+#| label: selected-model-performance
+#| tbl-cap: "Overall performance of the selected model"
+
+selected_row |>
+  select(
+    Model,
+    r.squared,
+    adj.r.squared,
+    RMSE
+  ) |>
+  gt() |>
+  cols_label(
+    Model = "Model",
+    r.squared = "R²",
+    adj.r.squared = "Adjusted R²",
+    RMSE = "RMSE"
+  ) |>
+  fmt_number(
+    columns = where(is.numeric),
+    decimals = 3
+  )
+```
+
+------------------------------------------------------------------------
+
+## 8. Interpret the results
+
+### Overall model performance
+
+The selected model, **`r selected_name`**, explains approximately **`r round(100 * selected_row$r.squared, 1)`%** of the variation in occupational prestige within this sample.
+
+Its adjusted R² is **`r round(selected_row$adj.r.squared, 3)`**, and its in-sample RMSE is **`r round(selected_row$RMSE, 2)` prestige points**.
+
+The RMSE describes the typical magnitude of the model's fitted residuals on a root-mean-square scale.
+
+It should not be interpreted as an estimate of out-of-sample predictive accuracy.
+
+### Interpreting education
+
+Holding the other predictors constant, a one-year increase in an occupation's average education is associated with a significant **`r round(coefficient_results |> filter(term == "education") |> pull(estimate), 2)`-point** increase in predicted occupational prestige, 95% CI \[`r round(coefficient_results |> filter(term == "education") |> pull(conf.low), 2)`, `r round(coefficient_results |> filter(term == "education") |> pull(conf.high), 2)`\].
+
+### Interpreting income
+
+Holding the other predictors constant, a one-unit increase in an occupation's average income is associated with a significant **`r round(coefficient_results |> filter(term == "income") |> pull(estimate), 4)`-point** increase in predicted occupational prestige, 95% CI \[`r round(coefficient_results |> filter(term == "income") |> pull(conf.low), 3)`, `r round(coefficient_results |> filter(term == "income") |> pull(conf.high), 3)`\].
+
+### Interpreting occupational category
+
+If the selected model includes `type`, its coefficients represent differences in predicted prestige relative to the reference occupational category, holding constant education and income.
+
+These are adjusted group differences, not differences between the raw category means.
+
+### Substantive conclusions
+
+This analysis illustrates how occupational prestige can be investigated using several competing regression models.
+
+The model-comparison process allows us to evaluate whether additional predictors explain meaningful variation beyond simpler models.
+
+The final model provides estimates of the conditional associations between occupational characteristics and prestige.
+
+However, several limitations should be recognized:
+
+- The observations describe occupations rather than individual people.
+- The data are observational.
+- Regression coefficients represent associations rather than causal effects.
+- Model diagnostics may reveal limitations not captured by summary fit statistics.
+- In-sample model performance does not establish out-of-sample predictive accuracy.
+
+------------------------------------------------------------------------
