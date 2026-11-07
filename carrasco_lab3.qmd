@@ -1,6 +1,6 @@
 ---
 title: "Linear Regression: Model Specification, Comparison, and Interpretation"
-subtitle: "A worked example using occupational prestige"
+subtitle: "Workplace rating based on handling complaints, learning, and raises"
 author: "Salome Carrasco"
 editor: visual
 date: today
