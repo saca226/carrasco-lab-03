@@ -18,7 +18,7 @@ execute:
   message: false
 ---
 
-Using the built-in R dataset attitude
+Using the built-in R dataset attitude :)
 
 ## 1.2 Load the required packages
 
